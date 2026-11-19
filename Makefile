@@ -1,6 +1,6 @@
 PY    = venv/bin/python
 PROTO = ../ssl_packet_package/proto/ssl
-RUN  ?= runs/default
+RUN  ?= runs/all-66
 
 .PHONY: init proto extract train eval clean
 
@@ -21,13 +21,15 @@ extract: proto
 	mkdir -p data
 	$(PY) -I extract.py "$(LOG)" pb data/$(basename $(basename $(notdir $(LOG)))).npz
 
-# обучение на всех data/*.npz; проверочная часть — каждый пятый кусок времени (или целые игры: VAL=имя.npz)
+# обучение на всех data/*.npz; проверочная часть — каждый пятый кусок времени (или целые игры: VAL="a.npz b.npz");
+# логи идут первыми: --val-logs забирает все аргументы после себя. Готовую модель не перезаписывает: RUN=runs/новое
 train:
-	$(PY) train.py --out $(RUN) $(if $(VAL),--val-logs $(VAL)) data/*.npz
+	@test ! -e $(RUN)/model.pt || { echo "$(RUN)/model.pt уже есть — укажи другую папку: make train RUN=runs/новое"; exit 1; }
+	$(PY) train.py data/*.npz --out $(RUN) $(if $(STEP),--step $(STEP)) $(if $(MODES),--modes $(MODES)) $(if $(VAL),--val-logs $(VAL))
 
 # ошибки прогнозов без обучения и модели на проверочной части
 eval:
-	$(PY) evaluate.py --run $(RUN) $(if $(VAL),--val-logs $(VAL)) data/*.npz
+	$(PY) evaluate.py data/*.npz --run $(RUN) $(if $(STEP),--step $(STEP)) $(if $(VAL),--val-logs $(VAL))
 
 clean:
 	rm -rf pb runs

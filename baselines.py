@@ -38,12 +38,18 @@ def fit_param(fn, grid, meta, Y):
 class Linear:
     """Линейная регрессия по тем же признакам, что у модели (с небольшой регуляризацией)."""
 
-    def fit(self, X, Y, ridge=1e-3):
+    def fit(self, X, Y, ridge=1e-3, chunk=1 << 18):
         self.mean, self.std = X.mean(0), X.std(0) + 1e-6
-        A = np.c_[(X - self.mean) / self.std, np.ones(len(X))].astype(np.float64)
-        reg = ridge * len(X) * np.eye(A.shape[1])
+        n = X.shape[1] + 1
+        AtA, AtY = np.zeros((n, n)), np.zeros((n, Y[0].size))
+        # по частям: float64-копия всей матрицы признаков на десятках игр не помещается в память
+        for j in range(0, len(X), chunk):
+            A = np.c_[(X[j:j + chunk] - self.mean) / self.std, np.ones(len(X[j:j + chunk]))].astype(np.float64)
+            AtA += A.T @ A
+            AtY += A.T @ Y[j:j + chunk].reshape(len(A), -1).astype(np.float64)
+        reg = ridge * len(X) * np.eye(n)
         reg[-1, -1] = 0
-        self.W = np.linalg.solve(A.T @ A + reg, A.T @ Y.reshape(len(Y), -1).astype(np.float64))
+        self.W = np.linalg.solve(AtA + reg, AtY)
         return self
 
     def predict(self, X):
