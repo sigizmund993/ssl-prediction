@@ -1,5 +1,14 @@
 /venv/
 /pb/
 /data/
-/runs/
 __pycache__/
+# runs/: модели и отчёты в репозитории; без производных прогнозов, служебных файлов CatBoost и данных опыта со стратегией
+/runs/*/pred_val.npy
+/runs/*/learn/
+/runs/*/test/
+/runs/*/tmp/
+/runs/*/*.tsv
+/runs/*/catboost_training.json
+/runs/strategy/
+/runs/strategy-src/
+/runs/strategy-eval/

@@ -1,0 +1,54 @@
+venv/bin/python evaluate.py data/*.npz --run runs/all-66 --step 6 --val-logs data/2026-07-05_11-33_ELIMINATION_PHASE_Warthog_Robotics-vs-TRAPS.npz data/2026-07-04_17-30_ELIMINATION_PHASE_The_Bots-vs-TRAPS.npz data/2026-07-04_15-59_ELIMINATION_PHASE_Warthog_Robotics-vs-ITAndroids.npz data/2026-07-04_10-29_ELIMINATION_PHASE_Delft_Mercurians-vs-ITAndroids.npz
+примеров: обучение 6275926, проверка 406355, признаков 67
+
+все примеры: примеров 406355. Ошибка, мм: среднее / медиана / p90
+                                                через 0.25 с           через 0.5 с          через 0.75 с           через 1.0 с
+постоянная скорость                             37 / 20 / 97         97 / 49 / 263        171 / 86 / 467       254 / 129 / 688
+ускорение, затухание 0.05 с                     34 / 20 / 90         95 / 53 / 251        172 / 95 / 453       257 / 143 / 677
+торможение 0.5 м/с²                             36 / 20 / 95         91 / 49 / 257        156 / 80 / 441       223 / 106 / 627
+линейная регрессия                              31 / 21 / 73         87 / 55 / 213        151 / 91 / 376       216 / 126 / 538
+модель                                          26 / 16 / 66         73 / 37 / 198        128 / 63 / 353        186 / 90 / 512
+
+игра идёт: примеров 216208. Ошибка, мм: среднее / медиана / p90
+                                                через 0.25 с           через 0.5 с          через 0.75 с           через 1.0 с
+постоянная скорость                            47 / 35 / 112        129 / 88 / 317       230 / 153 / 570       342 / 223 / 847
+ускорение, затухание 0.05 с                    44 / 33 / 101        125 / 91 / 299       228 / 160 / 551       343 / 236 / 831
+торможение 0.5 м/с²                            46 / 34 / 112        122 / 78 / 311       209 / 125 / 545       300 / 176 / 788
+линейная регрессия                              38 / 29 / 83        110 / 78 / 257       193 / 130 / 461       277 / 181 / 668
+модель                                          33 / 24 / 77         96 / 64 / 236       171 / 109 / 428       249 / 154 / 629
+
+игра идёт, быстрее 0.5 м/с: примеров 68729. Ошибка, мм: среднее / медиана / p90
+                                                через 0.25 с           через 0.5 с          через 0.75 с           через 1.0 с
+постоянная скорость                            79 / 70 / 148       234 / 207 / 430       429 / 382 / 784      649 / 579 / 1183
+ускорение, затухание 0.05 с                    70 / 60 / 133       220 / 196 / 406       415 / 371 / 757      637 / 571 / 1153
+торможение 0.5 м/с²                            79 / 71 / 143       223 / 201 / 406       390 / 345 / 722      560 / 488 / 1058
+линейная регрессия                             57 / 50 / 104       183 / 165 / 328       327 / 294 / 594       467 / 413 / 867
+модель                                          50 / 43 / 95       162 / 142 / 299       293 / 257 / 550       425 / 366 / 813
+
+разброс модели (sigma): доля примеров, где ошибка меньше радиуса, в который модель обещает 50 % и 90 %
+  через 0.25 с: 73 % и 92 %;  через 0.5 с: 75 % и 92 %;  через 0.75 с: 74 % и 91 %;  через 1.0 с: 74 % и 91 %;
+медиана sigma, мм:  22  56  93  137
+круг «90 %»: средняя площадь, м²:  0.013  0.103  0.320  0.679
+	Command being timed: "make eval STEP=6 VAL=data/2026-07-05_11-33_ELIMINATION_PHASE_Warthog_Robotics-vs-TRAPS.npz data/2026-07-04_17-30_ELIMINATION_PHASE_The_Bots-vs-TRAPS.npz data/2026-07-04_15-59_ELIMINATION_PHASE_Warthog_Robotics-vs-ITAndroids.npz data/2026-07-04_10-29_ELIMINATION_PHASE_Delft_Mercurians-vs-ITAndroids.npz"
+	User time (seconds): 118.16
+	System time (seconds): 12.00
+	Percent of CPU this job got: 127%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:42.24
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 7580156
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 29
+	Minor (reclaiming a frame) page faults: 1105419
+	Voluntary context switches: 1195
+	Involuntary context switches: 4301
+	Swaps: 0
+	File system inputs: 4452496
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

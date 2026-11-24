@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Прогноз роботов SSL</title>
+<style>
+  :root {
+    --bg: #111418; --panel: #1a1f26; --line: #2a313b; --text: #e6e9ee; --muted: #8b95a3;
+    --accent: #4f8cff; --a: #ff4fd8; --b: #22d3ee; --cv: #9aa3ad; --truth: #f5f5f5;
+    --yellow: #f5d90a; --blue: #3b82f6; --ok: #34d399; --warn: #f59e0b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 600; }
+  label { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  select, button, input[type=checkbox] { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+  select { padding: 4px 6px; max-width: 360px; }
+  button { padding: 4px 10px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  .sw { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; }
+  main { display: grid; grid-template-columns: 1fr 280px; gap: 0; height: calc(100vh - 112px); min-height: 360px; }
+  #wrap { position: relative; min-width: 0; }
+  canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
+  #busy { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(17,20,24,.75); font-size: 15px; text-align: center; padding: 16px; }
+  aside { background: var(--panel); border-left: 1px solid var(--line); padding: 12px 14px; overflow: auto; }
+  aside h2 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  aside h2:first-child { margin-top: 0; }
+  .row { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
+  .row span:last-child { font-variant-numeric: tabular-nums; }
+  .badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .badge.val { background: rgba(52,211,153,.15); color: var(--ok); }
+  .badge.train { background: rgba(245,158,11,.15); color: var(--warn); }
+  .muted { color: var(--muted); font-size: 12px; }
+  footer { display: flex; gap: 10px; align-items: center; padding: 8px 16px; background: var(--panel); border-top: 1px solid var(--line); height: 52px; }
+  #timeline { flex: 1; accent-color: var(--accent); }
+  #clock { font-variant-numeric: tabular-nums; min-width: 110px; text-align: right; color: var(--muted); }
+  @media (max-width: 760px) {
+    main { grid-template-columns: 1fr; height: auto; }
+    #wrap { height: 62vh; }
+    aside { border-left: 0; border-top: 1px solid var(--line); }
+    select { max-width: 100%; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Прогноз роботов</h1>
+  <label>Игра <select id="log"></select></label>
+  <label><span class="sw" style="background:var(--a)"></span>Модель A <select id="ma"></select></label>
+  <label><span class="sw" style="background:var(--b)"></span>Модель B <select id="mb"></select></label>
+  <label><input type="checkbox" id="showCv"> <span class="sw" style="background:var(--cv)"></span>пост. скорость</label>
+  <label><input type="checkbox" id="showTruth" checked> <span class="sw" style="background:var(--truth)"></span>на самом деле</label>
+  <label><input type="checkbox" id="showSigma" checked> круги «90 %»</label>
+  <label>Кого <select id="who"><option value="all">всех</option><option value="y">жёлтых</option><option value="b">синих</option><option value="sel">выбранного</option></select></label>
+</header>
+<main>
+  <div id="wrap"><canvas id="cv"></canvas><div id="busy"></div></div>
+  <aside>
+    <h2>Модели</h2>
+    <div id="models"></div>
+    <h2>Кадр</h2>
+    <div id="frameInfo" class="muted"></div>
+    <h2>Робот</h2>
+    <div id="robotInfo" class="muted">Щёлкните по роботу.</div>
+    <h2>Управление</h2>
+    <div class="muted">Пробел — пуск/пауза; ← → — кадр, с Shift — секунда; + − — скорость. Точки прогноза: 0.25, 0.5, 0.75 и 1 с.</div>
+  </aside>
+</main>
+<footer>
+  <button id="play">▶</button>
+  <select id="speed"><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option><option>4</option><option>8</option></select>
+  <input type="range" id="timeline" min="0" max="0" value="0">
+  <span id="clock">0:00</span>
+</footer>
+<script>
+const $ = id => document.getElementById(id);
+const CH = 600;                                  // кадров в куске (10 с)
+let info = null, opened = null, chunks = new Map(), pending = new Set();
+let frame = 0, playing = false, last = 0, selected = null;
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+async function api(path) {
+  const r = await fetch(path);
+  const j = await r.json();
+  if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+function modelById(id) { return info.models.find(m => m.id === id); }
+
+async function init() {
+  info = await api('/api/list');
+  for (const l of info.logs) $('log').add(new Option(l.replace('.npz', '').replace(/_/g, ' '), l));
+  for (const sel of [$('ma'), $('mb')]) {
+    if (sel === $('mb')) sel.add(new Option('— нет —', ''));
+    for (const m of info.models) {
+      const o = new Option(`${m.name}${m.ok ? '' : ' (другие признаки)'}`, m.id);
+      o.disabled = !m.ok;
+      sel.add(o);
+    }
+  }
+  // по умолчанию — проверочная игра основной модели и лучшая сеть
+  const best = modelById('all-66-l2-ple') || modelById('all-66') || info.models[0];
+  $('ma').value = best.id;
+  $('mb').value = modelById('all-66-xgb') ? 'all-66-xgb' : '';
+  if (best.val && best.val.length) $('log').value = best.val[0];
+  for (const id of ['log', 'ma', 'mb']) $(id).onchange = open;
+  for (const id of ['showCv', 'showTruth', 'showSigma', 'who']) $(id).onchange = draw;
+  await open();
+}
+
+function models() { return [$('ma').value, $('mb').value].filter(Boolean); }
+function modelsWithCv() { const m = models(); if (!m.includes('cv')) m.push('cv'); return m; }  // нужна для переключателя без перезагрузки
+
+async function open() {
+  playing = false; $('play').textContent = '▶';
+  const busy = $('busy');
+  busy.style.display = 'flex';
+  busy.textContent = 'Считаю прогноз по всей игре… на CPU это до минуты на модель.';
+  try {
+    const want = modelsWithCv();
+    opened = await api(`/api/open?log=${encodeURIComponent($('log').value)}&models=${want.join(',')}`);
+    opened.models = want;
+    chunks = new Map(); pending = new Set();
+    $('timeline').max = opened.frames - 1;
+    frame = Math.min(frame, opened.frames - 1);
+    busy.style.display = 'none';
+    renderModels();
+    await ensure(Math.floor(frame));
+    draw();
+  } catch (e) {
+    busy.textContent = 'Ошибка: ' + e.message;
+  }
+}
+
+function renderModels() {
+  const log = $('log').value;
+  const rows = [['A', $('ma').value, '--a'], ['B', $('mb').value, '--b']].filter(r => r[1]);
+  $('models').innerHTML = rows.map(([k, id, c]) => {
+    const m = modelById(id);
+    let badge = '';
+    if (m.val) badge = m.val.includes(log) ? '<span class="badge val">проверка</span>' : '<span class="badge train">игра была в обучении</span>';
+    return `<div style="margin-bottom:8px"><div><span class="sw" style="background:var(${c})"></span> <b>${k}</b> ${m.name} ${badge}</div><div class="muted">${m.about}</div></div>`;
+  }).join('') + `<div class="muted">${opened.names[0]} — жёлтые, ${opened.names[1]} — синие</div>`;
+}
+
+async function ensure(f) {
+  const c = Math.floor(f / CH);
+  for (const k of [c, c + 1]) {
+    if (k * CH >= opened.frames || chunks.has(k) || pending.has(k)) continue;
+    pending.add(k);
+    const key = `${$('log').value}|${opened.models.join(',')}`;
+    api(`/api/chunk?log=${encodeURIComponent($('log').value)}&models=${opened.models.join(',')}&start=${k * CH}&n=${CH}`)
+      .then(fr => { if (key === `${$('log').value}|${opened.models.join(',')}`) chunks.set(k, fr); pending.delete(k); if (k === c) draw(); })
+      .catch(e => { pending.delete(k); console.error(e); });
+  }
+  if (chunks.size > 12) for (const k of [...chunks.keys()]) if (Math.abs(k - c) > 3) chunks.delete(k);
+}
+
+function getFrame(f) {
+  const c = chunks.get(Math.floor(f / CH));
+  return c ? c[f - Math.floor(f / CH) * CH] : null;
+}
+
+// ---------- рисование ----------
+const canvas = $('cv'), ctx = canvas.getContext('2d');
+let view = null;
+
+function setupView() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const [L, W] = opened ? opened.field : [9000, 6000];
+  const margin = 400;
+  const s = Math.min(w / (L + 2 * margin), h / (W + 2 * margin));
+  view = { s, cx: w / 2, cy: h / 2, w, h };
+}
+const X = x => view.cx + x * view.s, Y = y => view.cy - y * view.s;
+
+function drawField() {
+  const [L, W, goal, pd, pw] = opened.field;
+  ctx.fillStyle = '#0f3d24'; ctx.fillRect(0, 0, view.w, view.h);
+  ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 1.5;
+  ctx.strokeRect(X(-L / 2), Y(W / 2), L * view.s, W * view.s);
+  ctx.beginPath(); ctx.moveTo(X(0), Y(W / 2)); ctx.lineTo(X(0), Y(-W / 2)); ctx.stroke();
+  ctx.beginPath(); ctx.arc(X(0), Y(0), 500 * view.s, 0, 2 * Math.PI); ctx.stroke();
+  for (const sgn of [-1, 1]) {
+    const x0 = sgn * L / 2;
+    ctx.strokeRect(Math.min(X(x0), X(x0 - sgn * pd)), Y(pw / 2), pd * view.s, pw * view.s);
+    ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(X(x0), Y(goal / 2)); ctx.lineTo(X(x0 + sgn * 180), Y(goal / 2)); ctx.lineTo(X(x0 + sgn * 180), Y(-goal / 2)); ctx.lineTo(X(x0), Y(-goal / 2)); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 1.5;
+  }
+}
+
+function path(x0, y0, p, color, width, dash, dots) {
+  ctx.strokeStyle = color; ctx.lineWidth = width; ctx.setLineDash(dash || []);
+  ctx.beginPath(); ctx.moveTo(X(x0), Y(y0));
+  for (let j = 0; j < p.length; j += 2) ctx.lineTo(X(p[j]), Y(p[j + 1]));
+  ctx.stroke(); ctx.setLineDash([]);
+  if (dots) { ctx.fillStyle = color; for (let j = 0; j < p.length; j += 2) { ctx.beginPath(); ctx.arc(X(p[j]), Y(p[j + 1]), j === p.length - 2 ? 3.5 : 2.2, 0, 2 * Math.PI); ctx.fill(); } }
+}
+
+function visible(k) {
+  const w = $('who').value;
+  if (w === 'y') return k < 16;
+  if (w === 'b') return k >= 16;
+  if (w === 'sel') return k === selected;
+  return true;
+}
+
+function draw() {
+  if (!opened) return;
+  setupView();
+  drawField();
+  const f = Math.floor(frame);
+  const fr = getFrame(f);
+  updateClock(f);
+  if (!fr) { ctx.fillStyle = '#fff'; ctx.fillText('загрузка…', 12, 20); ensure(f); return; }
+  const pos = {};
+  for (const [k, x, y] of fr.robots) pos[k] = [x, y];
+  const colorA = css('--a'), colorB = css('--b'), colorCv = css('--cv'), colorTruth = css('--truth');
+  const layers = [];
+  if ($('showCv').checked) layers.push(['cv', colorCv, [6, 5]]);
+  if ($('mb').value) layers.push([$('mb').value, colorB, null]);
+  if ($('ma').value) layers.push([$('ma').value, colorA, null]);
+  for (const [k, x, y] of fr.robots) {
+    if (!visible(k)) continue;
+    if ($('showTruth').checked && fr.truth[k]) path(x, y, fr.truth[k], colorTruth, 1.2, [2, 3], true);
+    for (const [mid, color, dash] of layers) {
+      const r = fr.pred[mid] && fr.pred[mid][k];
+      if (!r) continue;
+      if (r.m && mid !== 'cv') {   // варианты будущего: прозрачность по весу
+        for (const mode of r.m) { ctx.globalAlpha = Math.max(0.15, mode[0]); path(x, y, mode.slice(1), color, 1.2, [4, 3], false); }
+        ctx.globalAlpha = 1;
+      }
+      if ($('showSigma').checked && r.s) {
+        ctx.strokeStyle = color; ctx.globalAlpha = 0.35; ctx.lineWidth = 1;
+        // у выбранного робота — все горизонты, у остальных только 1 с, иначе кругов слишком много
+        for (let j = k === selected ? 0 : r.s.length - 1; j < r.s.length; j++) { ctx.beginPath(); ctx.arc(X(r.p[2 * j]), Y(r.p[2 * j + 1]), r.s[j] * view.s, 0, 2 * Math.PI); ctx.stroke(); }
+        ctx.globalAlpha = 1;
+      }
+      path(x, y, r.p, color, mid === 'cv' ? 1.2 : 2, dash, mid !== 'cv');
+    }
+  }
+  for (const [k, x, y, th] of fr.robots) {
+    ctx.globalAlpha = visible(k) ? 1 : 0.35;
+    ctx.fillStyle = k < 16 ? css('--yellow') : css('--blue');
+    ctx.strokeStyle = k === selected ? '#fff' : '#000'; ctx.lineWidth = k === selected ? 3 : 1;
+    ctx.beginPath(); ctx.arc(X(x), Y(y), Math.max(5, 90 * view.s), 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+    if (th !== null) { ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(X(x), Y(y)); ctx.lineTo(X(x + 90 * Math.cos(th)), Y(y + 90 * Math.sin(th))); ctx.stroke(); }
+    ctx.fillStyle = '#000'; ctx.font = `bold ${Math.max(9, 80 * view.s)}px system-ui`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(k % 16, X(x), Y(y) + 1);
+  }
+  ctx.globalAlpha = 1;
+  if (fr.ball) { ctx.fillStyle = '#ff8c1a'; ctx.beginPath(); ctx.arc(X(fr.ball[0]), Y(fr.ball[1]), Math.max(3.5, 21 * view.s), 0, 2 * Math.PI); ctx.fill(); }
+  // команда судьи
+  const cmdName = info.commands[fr.cmd] || `команда ${fr.cmd}`;
+  const trained = info.trained.includes(fr.cmd);
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.font = '600 13px system-ui';
+  ctx.fillStyle = trained ? '#fff' : css('--warn');
+  ctx.fillText(cmdName + (trained ? '' : ' — вне обучения'), 12, 10);
+  renderFrameInfo(fr, cmdName, trained);
+  renderRobot(fr, pos);
+}
+
+function err1s(p, t) { return Math.hypot(p[6] - t[6], p[7] - t[7]); }
+
+function renderFrameInfo(fr, cmdName, trained) {
+  let html = `<div class="row"><span>Команда</span><span>${cmdName}</span></div>`;
+  html += `<div class="row"><span>Роботов</span><span>${fr.robots.length}</span></div>`;
+  // средняя ошибка через 1 с по видимым роботам в этом кадре
+  for (const [label, mid] of [['A', $('ma').value], ['B', $('mb').value], ['пост. скорость', 'cv']]) {
+    if (!mid || !fr.pred[mid]) continue;
+    const e = fr.robots.filter(([k]) => visible(k) && fr.truth[k] && fr.pred[mid][k]).map(([k]) => err1s(fr.pred[mid][k].p, fr.truth[k]));
+    if (e.length) html += `<div class="row"><span>Ошибка через 1 с, ${label}</span><span>${Math.round(e.reduce((a, b) => a + b, 0) / e.length)} мм</span></div>`;
+  }
+  if (!trained) html += '<div class="muted">На этой команде модели не учились: прогноз может быть плохим.</div>';
+  $('frameInfo').innerHTML = html;
+}
+
+function renderRobot(fr, pos) {
+  if (selected === null || !pos[selected]) { $('robotInfo').innerHTML = selected === null ? 'Щёлкните по роботу.' : 'Выбранного робота нет на поле.'; return; }
+  const k = selected, team = k < 16 ? 0 : 1;
+  let html = `<div class="row"><span>${opened.names[team] || (team ? 'синие' : 'жёлтые')}</span><span>№ ${k % 16}</span></div>`;
+  for (const [label, mid] of [['A', $('ma').value], ['B', $('mb').value], ['пост. скорость', 'cv']]) {
+    const r = mid && fr.pred[mid] && fr.pred[mid][k];
+    if (!r) continue;
+    let s = fr.truth[k] ? `${Math.round(err1s(r.p, fr.truth[k]))} мм` : '—';
+    if (r.s) s += ` <span class="muted">(R90 ${r.s[3]})</span>`;
+    html += `<div class="row"><span>${label}, через 1 с</span><span>${s}</span></div>`;
+    if (r.m) html += `<div class="muted">варианты: ${r.m.map(m => m[0].toFixed(2)).join(' / ')}</div>`;
+  }
+  $('robotInfo').innerHTML = html;
+}
+
+function updateClock(f) {
+  const t = f / 60, total = opened.frames / 60;
+  const fmt = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  $('clock').textContent = `${fmt(t)} / ${fmt(total)}`;
+  $('timeline').value = f;
+}
+
+// ---------- управление ----------
+function tick(ts) {
+  if (playing) {
+    const dt = last ? (ts - last) / 1000 : 0;
+    const next = Math.min(opened.frames - 1, frame + dt * 60 * parseFloat($('speed').value));
+    if (getFrame(Math.floor(next))) frame = next;      // ждём кусок, если он ещё не пришёл
+    ensure(Math.floor(frame));
+    if (frame >= opened.frames - 1) { playing = false; $('play').textContent = '▶'; }
+    draw();
+  }
+  last = ts;
+  requestAnimationFrame(tick);
+}
+function seek(f) { frame = Math.max(0, Math.min(opened.frames - 1, f)); ensure(Math.floor(frame)); draw(); }
+$('play').onclick = () => { playing = !playing; $('play').textContent = playing ? '❚❚' : '▶'; };
+$('timeline').oninput = e => seek(+e.target.value);
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'SELECT') return;
+  if (e.code === 'Space') { e.preventDefault(); $('play').click(); }
+  else if (e.key === 'ArrowRight') seek(Math.floor(frame) + (e.shiftKey ? 60 : 1));
+  else if (e.key === 'ArrowLeft') seek(Math.floor(frame) - (e.shiftKey ? 60 : 1));
+  else if (e.key === '+' || e.key === '=' || e.key === '-') {
+    const s = $('speed'); s.selectedIndex = Math.max(0, Math.min(s.options.length - 1, s.selectedIndex + (e.key === '-' ? -1 : 1)));
+  }
+});
+canvas.addEventListener('click', e => {
+  const fr = getFrame(Math.floor(frame)); if (!fr) return;
+  const r = canvas.getBoundingClientRect();
+  const wx = (e.clientX - r.left - view.cx) / view.s, wy = -(e.clientY - r.top - view.cy) / view.s;
+  let best = null, bd = 300;
+  for (const [k, x, y] of fr.robots) { const d = Math.hypot(x - wx, y - wy); if (d < bd) { bd = d; best = k; } }
+  selected = best; draw();
+});
+window.addEventListener('resize', draw);
+requestAnimationFrame(tick);
+init().catch(e => { $('busy').style.display = 'flex'; $('busy').textContent = 'Ошибка: ' + e.message; });
+</script>
+</body>
+</html>

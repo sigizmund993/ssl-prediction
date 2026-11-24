@@ -5,6 +5,7 @@
 скорости в м/с. Ответ — на сколько робот отклонился от прогноза «постоянная скорость» через HORIZONS секунд.
 Признаки каждого робота считаются одинаково для обеих команд: «свои» и «чужие» — относительно него самого.
 """
+import os
 import numpy as np
 
 DT = 1 / 60                         # сетка времени, с
@@ -16,6 +17,14 @@ NB_LAGS = ()                        # история скорости сосед
 MOVING = 100.0                      # мм/с: быстрее — ось x вдоль скорости
 RUNNING = (2, 3, 8, 9)              # NORMAL_START, FORCE_START, DIRECT_FREE_YELLOW/BLUE: игра идёт
 STOP = 1
+# состояние игры подробнее, чем флаги «игра идёт» и STOP: команда судьи относительно команды робота (чей свободный),
+# сколько секунд назад она сменилась и какая была до неё. Опыт: включается SSL_REF_STATE=1 (меняет признаки — старые
+# модели с ним не работают)
+REF_STATE = os.environ.get('SSL_REF_STATE') == '1'
+REF_NOW = ['normal', 'force', 'free_ours', 'free_theirs']   # STOP уже есть отдельным признаком
+REF_PREV = ['stop', 'normal', 'force', 'kickoff_ours', 'kickoff_theirs', 'penalty_ours', 'penalty_theirs', 'free_ours',
+            'free_theirs', 'placement_ours', 'placement_theirs', 'other']
+REF_SINCE_MAX = 10.0                # с: дольше — «давно»
 MAX_SPEED = 6000.0                  # мм/с: быстрее робот не ездит — это сбой трекера или перенос робота
 DEFAULT_FIELD = (9000.0, 6000.0)    # если в логе нет геометрии (дивизион B)
 # «все объекты» для сети по множеству (model.SetPredictor, build(agents=True)): мяч и ближайшие N_AGENTS − 1 роботов
@@ -42,7 +51,28 @@ def feature_names():
     names += ['wall_fwd', 'wall_back', 'wall_left', 'wall_right']
     names += ['own_goal_x', 'own_goal_y', 'opp_goal_x', 'opp_goal_y', 'side_known']
     names += ['running', 'stop', 'keeper', 'nearest_to_ball']
+    if REF_STATE:
+        names += [f'ref_{n}' for n in REF_NOW] + ['ref_since'] + [f'ref_prev_{n}' for n in REF_PREV]
     return names
+
+
+def _ref_onehot(c, team, kinds):
+    """Команды судьи c (n,) → one-hot (n, len(kinds)) относительно команды робота team (0 — жёлтые, 1 — синие):
+    *_ours — команда дана команде робота. Пары команд в Referee.Command: жёлтым — base, синим — base + 1."""
+    pairs = {'kickoff': (4,), 'penalty': (6,), 'free': (8, 10), 'placement': (16,)}
+    single = {'stop': 1, 'normal': 2, 'force': 3}
+    cols, known = [], np.zeros(len(c), bool)
+    for kind in kinds:
+        if kind == 'other':
+            continue
+        if kind in single:
+            col = c == single[kind]
+        else:
+            name, side = kind.rsplit('_', 1)
+            col = np.isin(c, [b + (team if side == 'ours' else 1 - team) for b in pairs[name]])
+        cols.append((kind, col))
+        known |= col
+    return np.stack([col if kind != 'other' else ~known for kind, col in cols + ([('other', None)] if 'other' in kinds else [])], axis=1)
 
 
 def load_grid(path):
@@ -66,9 +96,11 @@ def _rot(v, c, s, m):
     return np.stack([c * v[..., 0] + s * v[..., 1], m * (c * v[..., 1] - s * v[..., 0])], axis=-1)
 
 
-def build(path, step=3, log_id=0, agents=False):
+def build(path, step=3, log_id=0, agents=False, all_frames=False):
     """Признаки X (M, F), ответы Y (M, H, 2) и сведения о примерах meta по одному npz. step — брать каждый step-й кадр.
-    agents=True — ещё A (M, N_AGENTS, len(AGENT_NAMES)), float16: мяч и ближайшие роботы обеих команд в системе робота."""
+    agents=True — ещё A (M, N_AGENTS, len(AGENT_NAMES)), float16: мяч и ближайшие роботы обеих команд в системе робота.
+    all_frames=True — для просмотра (viewer.py): все кадры с хорошим прошлым при любой команде судьи, будущее не
+    требуется (в Y тогда NaN, где его нет). В meta есть ang и mirror — поворот и отражение системы робота."""
     g = load_grid(path)
     R, B, cmd, ok = g['robots'], g['ball'], g['cmd'], g['ok']
     G = len(ok)
@@ -81,14 +113,24 @@ def build(path, step=3, log_id=0, agents=False):
     hor_n = [int(round(h / DT)) for h in HORIZONS]
     # окно [i - max лаг, i + max горизонт] целиком из хороших кадров
     bad = np.r_[0, np.cumsum(~ok)]
-    frames = np.arange(max(lag_n), G - max(hor_n), step)
-    frames = frames[(bad[frames + max(hor_n) + 1] - bad[frames - max(lag_n)] == 0) & np.isin(cmd[frames], RUNNING + (STOP,))]
+    if all_frames:
+        frames = np.arange(max(lag_n), G, step)
+        frames = frames[bad[frames + 1] - bad[frames - max(lag_n)] == 0]
+    else:
+        frames = np.arange(max(lag_n), G - max(hor_n), step)
+        frames = frames[(bad[frames + max(hor_n) + 1] - bad[frames - max(lag_n)] == 0) & np.isin(cmd[frames], RUNNING + (STOP,))]
     half = g['field'] / 2
     has_ball_all = np.isfinite(B[:, 0])
     # ближайший к мячу в каждой команде
     dball = np.linalg.norm(R[:, :, :2] - B[:, None, :2], axis=2)
     dball = np.where(np.isfinite(dball), dball, np.inf)
     nearest = np.stack([np.argmin(dball[:, :16], axis=1), 16 + np.argmin(dball[:, 16:], axis=1)], axis=1)
+
+    # команда судьи: с какого кадра действует и какая была до неё
+    change = np.r_[True, cmd[1:] != cmd[:-1]]
+    cmd_start = np.maximum.accumulate(np.where(change, np.arange(G), 0))
+    cmd_since = np.minimum((np.arange(G) - cmd_start) * DT, REF_SINCE_MAX)
+    cmd_prev = np.where(cmd_start > 0, cmd[np.maximum(cmd_start - 1, 0)], -1)
 
     Xs, Ys, metas, As = [], [], [], []
     for k in range(32):
@@ -98,7 +140,7 @@ def build(path, step=3, log_id=0, agents=False):
         valid = np.isfinite(P[i, 0])
         for n in lag_n:
             valid &= np.isfinite(P[i - n, 0])
-        for n in hor_n:
+        for n in ([] if all_frames else hor_n):
             valid &= np.isfinite(P[i + n, 0]) & (np.linalg.norm(P[i + n] - P[i], axis=1) < MAX_SPEED * n * DT)
         valid &= np.linalg.norm(Vel[i], axis=1) < MAX_SPEED
         i = i[valid]
@@ -176,14 +218,22 @@ def build(path, step=3, log_id=0, agents=False):
         f.append(np.concatenate([_rot(own, c, s, m) / 1000 * side_known[:, None], _rot(opp, c, s, m) / 1000 * side_known[:, None],
                                  side_known[:, None]], axis=1))
         running = np.isin(cmd[i], RUNNING)
-        f.append(np.stack([running, cmd[i] == STOP, g['keeper'][i, team] == k % 16, nearest[i, team] == k], axis=1).astype(float))
+        keeper = g['keeper'][i, team] == k % 16
+        f.append(np.stack([running, cmd[i] == STOP, keeper, nearest[i, team] == k], axis=1).astype(float))
+        if REF_STATE:
+            f.append(np.concatenate([_ref_onehot(cmd[i], team, REF_NOW), cmd_since[i][:, None],
+                                     _ref_onehot(cmd_prev[i], team, REF_PREV)], axis=1).astype(float))
         Xs.append(np.concatenate(f, axis=1).astype(np.float32))
 
-        y = np.stack([_rot(P[i + n] - p - v * (n * DT), c, s, m) / 1000 for n in hor_n], axis=1)
+        if all_frames:
+            Pf = np.vstack([P, np.full((max(hor_n), 2), np.nan)])  # за концом лога будущего нет
+            y = np.stack([_rot(Pf[i + n] - p - v * (n * DT), c, s, m) / 1000 for n in hor_n], axis=1)
+        else:
+            y = np.stack([_rot(P[i + n] - p - v * (n * DT), c, s, m) / 1000 for n in hor_n], axis=1)
         Ys.append(y.astype(np.float32))
         acc = _rot((v - Vel[i - lag_n[1]]) / LAGS[1], c, s, m) / 1000
         metas.append(dict(log=np.full(len(i), log_id), frame=i, time=g['grid'][i], robot=np.full(len(i), k), running=running,
-                          speed=speed / 1000, vel=_rot(v, c, s, m) / 1000, acc=acc))
+                          keeper=keeper, ang=ang, mirror=m, speed=speed / 1000, vel=_rot(v, c, s, m) / 1000, acc=acc))
     meta = {key: np.concatenate([mm[key] for mm in metas]) for key in metas[0]}
     if agents:
         return np.concatenate(Xs), np.concatenate(Ys), meta, np.concatenate(As)
@@ -230,6 +280,16 @@ def build_all(paths, step=3, agents=False):
         for p in parts:
             p[j] = None
     return (out[0], out[1], meta, out[3]) if agents else (out[0], out[1], meta)
+
+
+def restrict(meta, mask, keepers=True, stop=True):
+    """Обучающая маска без вратарей (keepers=False) и/или без кадров STOP (stop=False). Проверку не трогать: её
+    подмножества — в evaluate.subsets."""
+    if not keepers:
+        mask = mask & ~meta['keeper']
+    if not stop:
+        mask = mask & meta['running']
+    return mask
 
 
 def split(meta, paths, val_logs=(), block=60.0, purge=1.5):

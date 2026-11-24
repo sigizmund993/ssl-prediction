@@ -12,8 +12,13 @@ R50, R90 = np.sqrt(2 * np.log(2)), np.sqrt(2 * np.log(10))
 
 
 def subsets(meta):
-    return {'все примеры': np.ones(len(meta['speed']), bool), 'игра идёт': meta['running'],
-            'игра идёт, быстрее 0.5 м/с': meta['running'] & (meta['speed'] > 0.5)}
+    out = {'все примеры': np.ones(len(meta['speed']), bool), 'игра идёт': meta['running'],
+           'игра идёт, быстрее 0.5 м/с': meta['running'] & (meta['speed'] > 0.5)}
+    if 'keeper' in meta:
+        # вратари — 20 % примеров и намного предсказуемее полевых: без них цифры честнее для планировщика
+        out['игра идёт, без вратарей'] = meta['running'] & ~meta['keeper']
+        out['игра идёт, без вратарей, быстрее 0.5 м/с'] = meta['running'] & ~meta['keeper'] & (meta['speed'] > 0.5)
+    return out
 
 
 def model_preds(net, X, Y):
